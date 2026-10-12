@@ -5,7 +5,48 @@ const { getPlan } = require('../lib/plans');
 const { publishToPlatform } = require('../platforms/publishers');
 const router = express.Router();
 router.use(auth);
-async function workspaceFor(userId){ return prisma.workspace.findFirst({where:{ownerId:userId}}); }
+async function workspaceFor(userId) {
+  let workspace = await prisma.workspace.findFirst({
+    where: { ownerId: userId }
+  });
+
+  if (workspace) return workspace;
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId }
+  });
+
+  if (!user) return null;
+
+  const baseSlug = `${user.firstName || 'user'}-${user.lastName || 'workspace'}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+
+  workspace = await prisma.workspace.create({
+    data: {
+      name: `${user.firstName}'s Workspace`,
+      slug: `${baseSlug}-${user.id.slice(0, 8)}`,
+      ownerId: user.id,
+      members: {
+        create: {
+          userId: user.id,
+          role: 'owner',
+          status: 'active'
+        }
+      },
+      subscription: {
+        create: {
+          plan: user.selectedPlan || 'free',
+          status: 'trialing',
+          trialEndsAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
+        }
+      }
+    }
+  });
+
+  return workspace;
+}
 router.get('/dashboard', async (req,res)=>{
   const workspace = await workspaceFor(req.user.id); if(!workspace) return res.status(404).json({success:false,message:'Workspace not found'});
   const [posts, accounts, media] = await Promise.all([
